@@ -50,10 +50,14 @@ import argparse
 import asyncio
 import csv
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Iterable, Optional
+
+# Регулярка для поиска http(s)-ссылок внутри JSON-строк карточки
+_HTTP_RE = re.compile(r"https?://[^\s\"'<>\\]+")
 
 
 # --------------------------------------------------------------------------- #
@@ -124,18 +128,114 @@ def _extract_phones(item: dict) -> list[str]:
     return phones
 
 
+# Домены самих Яндекс.Карт/Яндекса — ссылки на них сайтом заведения НЕ считаются
+_YANDEX_NOISE_DOMAINS = (
+    "yandex.ru", "yandex.net", "yandex.com", "yandex.org",
+    "yandex.by", "yandex.kz", "yandex.ua", "yandex.az", "yandex.de",
+    "ya.ru", "yastatic.net", "auto.ru", "kinopoisk.ru", "bringly.ru",
+    "beru.ru", "edadeal.ru", "travel.yandex.ru",
+)
+
+
+def _is_own_yandex_link(link: str) -> bool:
+    """Ссылка ведёт на сам Яндекс (карты, поиск и т.п.)?"""
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(link).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == d or host.endswith("." + d) for d in _YANDEX_NOISE_DOMAINS)
+
+
 def _extract_websites(item: dict) -> list[str]:
+    """Собрать реальные сайты организации из всех известных форматов ответа API."""
     sites: list[str] = []
-    for u in (item.get("urls") or {}).get("items") or []:
-        link = u.get("link") or u.get("url") or u.get("uri")
-        if link:
-            sites.append(str(link))
-    # иногда сайты лежат в отдельных полях
-    for key in ("business_site", "site"):
+
+    def add(link: Any) -> None:
+        if not link or not isinstance(link, str):
+            return
+        link = link.strip()
+        if not link.lower().startswith(("http://", "https://")):
+            link = "https://" + link
+        if _is_own_yandex_link(link):
+            return  # ссылки на сами Карты — не сайт заведения
+        sites.append(link)
+
+    # 1) urls.items[].link / .url / .uri
+    urls_field = item.get("urls")
+    if isinstance(urls_field, dict):
+        for u in urls_field.get("items") or []:
+            if isinstance(u, dict):
+                add(u.get("link") or u.get("url") or u.get("uri"))
+            elif isinstance(u, str):
+                add(u)
+    elif isinstance(urls_field, list):
+        for u in urls_field:
+            if isinstance(u, dict):
+                add(u.get("link") or u.get("url") or u.get("uri"))
+            elif isinstance(u, str):
+                add(u)
+
+    # 2) отдельные поля с сайтом
+    for key in ("business_site", "site", "website", "url_site"):
         v = item.get(key)
-        if isinstance(v, str) and v.startswith("http"):
-            sites.append(v)
-    return sorted(set(sites))
+        if isinstance(v, str):
+            add(v)
+
+    # 3) extended_data — «Расширенные данные» карточки (Описание, Сайт и т.п.)
+    ext = item.get("extended_data") or (item.get("data") or {}).get("extendedData")
+    if isinstance(ext, dict):
+        for e in ext.get("items") or []:
+            if not isinstance(e, dict):
+                continue
+            label = str(e.get("name") or e.get("title") or "").lower()
+            if "сайт" in label or "site" in label:
+                for v in (e.get("values") or []):
+                    if isinstance(v, dict):
+                        add(v.get("link") or v.get("url") or v.get("text"))
+                    elif isinstance(v, str):
+                        add(v)
+            # значение может лежать в fields/content
+            content = json.dumps(e, ensure_ascii=False)
+            for m in _HTTP_RE.findall(content):
+                add(m)
+
+    # 4) contacts / info блоки
+    for block_key in ("contacts", "info", "additional_info"):
+        block = item.get(block_key)
+        if isinstance(block, dict):
+            for v in block.values():
+                if isinstance(v, str) and _HTTP_RE.search(v):
+                    add(v)
+
+    # 5) links / external_links
+    for lk in item.get("links") or item.get("external_links") or []:
+        if isinstance(lk, dict):
+            add(lk.get("url") or lk.get("link"))
+        elif isinstance(lk, str):
+            add(lk)
+
+    # 6) fallback: общий поиск http-ссылок в JSON карточки,
+    #    исключая служебные поля (ссылка на сами Карты и пр.)
+    shallow = {k: v for k, v in item.items()
+               if k not in ("url", "urls", "ymaps_url", "map_url")}
+    for m in _HTTP_RE.findall(json.dumps(shallow, ensure_ascii=False)):
+        add(m)
+
+    # нормализация: склеиваем дубликаты (www/протокол/слэш в конце)
+    by_host: dict[str, str] = {}
+    for s in sites:
+        try:
+            from urllib.parse import urlparse
+            host = (urlparse(s).hostname or "").lower().removeprefix("www.")
+        except Exception:
+            host = s
+        key = host or s
+        prev = by_host.get(key)
+        # предпочитаем https-вариант
+        if prev is None or (s.startswith("https://") and not prev.startswith("https://")):
+            by_host[key] = s.rstrip("/")
+    return sorted(by_host.values())
 
 
 def _extract_rating(item: dict) -> tuple[Optional[float], int]:
@@ -198,10 +298,38 @@ def parse_search_response(payload: dict) -> list[Organization]:
 #  Фильтрация
 # --------------------------------------------------------------------------- #
 
+def _looks_like_business_site(link: str) -> bool:
+    """Дополнительная страховка: считаем сайтом только реальные внешние ссылки.
+
+    Отсекаем ссылки на сам Яндекс, соцсети-мессенджеры (vk/telegram/whatsapp —
+    это не сайт) и картинки/статические ресурсы.
+    """
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(link).hostname or "").lower()
+    except Exception:
+        return False
+    if not host or _is_own_yandex_link(link):
+        return False
+    SOCIAL_HOSTS = ("vk.com", "t.me", "telegram.org", "instagram.com",
+                    "facebook.com", "twitter.com", "wa.me", "whatsapp.com",
+                    "ok.ru", "viber.com", "dzen.ru", "rutube.ru")
+    if any(host == d or host.endswith("." + d) for d in SOCIAL_HOSTS):
+        return False
+    # статика/картинки — не сайты
+    if any(host.startswith(p) for p in ("avatars.", "storage.", "img.", "images.")):
+        return False
+    return True
+
+
 def apply_filters(orgs: Iterable[Organization], *, only_no_website: bool,
                   min_rating: float = 0, min_reviews: int = 0) -> list[Organization]:
     out: list[Organization] = []
     for o in orgs:
+        # перепроверяем has_website по «надёжным» ссылкам
+        real_sites = [s for s in o.websites if _looks_like_business_site(s)]
+        o.websites = real_sites
+        o.has_website = bool(real_sites)
         if only_no_website and o.has_website:
             continue
         if min_rating > 0 and (o.rating is None or o.rating < min_rating):
@@ -234,7 +362,9 @@ def save_json(orgs: list[Organization], path: str) -> None:
 # --------------------------------------------------------------------------- #
 
 # Подстроки, по которым узнаём нужные ответы API Яндекса
-API_MARKERS = ("search/list", "/api/list/")
+# (широкий список: Яндекс меняет пути эндпоинтов, поэтому ловим все *.yandex.*/api/
+#  c результатами поиска — лишние ответы просто не дадут организаций при разборе)
+API_MARKERS = ("search/list", "/api/list/", "/api/submit/", "maps/api")
 
 
 async def parse_with_playwright(city: str, query: str, max_cards: int,
