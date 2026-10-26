@@ -320,6 +320,13 @@ class YandexMapsParser:
                 if working:
                     hours = working[0].get('text', '')
                 
+                # Формируем ссылку на Яндекс.Карты
+                yandex_url = ''
+                if coords:
+                    lon, lat = coords.split()
+                    encoded_name = requests.utils.quote(f"{name} {city}")
+                    yandex_url = f"https://yandex.ru/maps/?ll={lon}%2C{lat}&z=17&text={encoded_name}"
+                
                 business = {
                     'name': name,
                     'address': address,
@@ -328,6 +335,7 @@ class YandexMapsParser:
                     'website': url_field if has_website else '',
                     'hours': hours,
                     'coordinates': coords,
+                    'yandex_url': yandex_url,
                     'category': query,
                     'city': city,
                 }
@@ -375,7 +383,7 @@ class YandexMapsParser:
             return filename
         
         fieldnames = ['name', 'address', 'phone', 'has_website', 
-                      'website', 'hours', 'category', 'city']
+                      'website', 'hours', 'yandex_url', 'category', 'city']
         
         with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -500,15 +508,26 @@ async function searchBusinesses(query, city) {
       const obj = f.GeoObject;
       const meta = obj.metaDataProperty?.GeocoderMetaData;
       const company = obj.metaDataProperty?.CompanyMetaData;
+      const coords = obj.Point?.pos || '';
+      const name = obj.name || 'Без названия';
+      
+      // Формируем ссылку на Яндекс.Карты
+      let yandex_url = '';
+      if (coords) {
+        const [lon, lat] = coords.split(' ');
+        const encoded = encodeURIComponent(\`\${name} \${city}\`);
+        yandex_url = \`https://yandex.ru/maps/?ll=\${lon}%2C\${lat}&z=17&text=\${encoded}\`;
+      }
       
       return {
-        name: obj.name || 'Без названия',
+        name,
         address: meta?.text || '',
         phone: company?.Phones?.[0]?.formatted || '',
         has_website: !!company?.url,
         website: company?.url || '',
         hours: company?.WorkingHours?.[0]?.text || '',
-        coordinates: obj.Point?.pos || '',
+        coordinates: coords,
+        yandex_url,
       };
     });
     
@@ -533,7 +552,7 @@ function exportCSV(businesses, filename) {
     filename = \`leads_\${date}.csv\`;
   }
   
-  const headers = ['name', 'address', 'phone', 'has_website', 'website', 'hours'];
+  const headers = ['name', 'address', 'phone', 'has_website', 'website', 'hours', 'yandex_url'];
   const rows = businesses.map(b => headers.map(h => \`"\${b[h] || ''}"\`).join(','));
   const csv = '\\uFEFF' + [headers.join(','), ...rows].join('\\n');
   

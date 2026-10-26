@@ -17,6 +17,7 @@ export default function ResultsTable({ businesses }: ResultsTableProps) {
             <th className="px-4 py-3 text-center font-medium">Рейтинг</th>
             <th className="px-4 py-3 text-center font-medium hidden sm:table-cell">Отзывы</th>
             <th className="px-4 py-3 text-center font-medium">Сайт</th>
+            <th className="px-4 py-3 text-center font-medium">Я.Карты</th>
             <th className="px-4 py-3 text-center font-medium hidden lg:table-cell">Часы работы</th>
           </tr>
         </thead>
@@ -55,6 +56,17 @@ export default function ResultsTable({ businesses }: ResultsTableProps) {
                     <i className="fas fa-times"></i> Нет
                   </span>
                 )}
+              </td>
+              <td className="px-4 py-3 text-center">
+                <a
+                  href={b.yandexUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center w-8 h-8 bg-yellow-400/10 hover:bg-yellow-400/20 text-yellow-400 rounded-lg transition-all group"
+                  title="Открыть на Яндекс.Картах"
+                >
+                  <i className="fas fa-map-marked-alt group-hover:scale-110 transition-transform"></i>
+                </a>
               </td>
               <td className="px-4 py-3 text-center text-slate-500 text-xs hidden lg:table-cell">
                 {b.workingHours}

@@ -10,6 +10,7 @@ export interface Business {
   website?: string
   workingHours: string
   city: string
+  yandexUrl: string
 }
 
 const businessNames: Record<string, string[]> = {
@@ -32,6 +33,16 @@ const cities: Record<string, string[]> = {
   'Екатеринбург': ['ул. Ленина', 'проспект Космонавтов', 'ул. Малышева', 'ул. 8 Марта', 'ул. Вайнера', 'ул. Белинского', 'ул. Щорса', 'ул. Луначарского', 'ул. Сакко и Ванцетти', 'ул. Бажова'],
   'Казань': ['ул. Баумана', 'ул. Петербургская', 'проспект Победы', 'ул. Декабристов', 'ул. Чистопольская', 'ул. Спартаковская', 'ул. Пушкина', 'ул. Кремлёвская', 'ул. Татарстан', 'ул. Гвардейская'],
   'Краснодар': ['ул. Красная', 'ул. Ленина', 'ул. Октябрьская', 'ул. Северная', 'ул. Московская', 'ул. Гоголя', 'ул. Постовая', 'ул. Мира', 'ул. Рашпилевская', 'ул. Калинина'],
+}
+
+// Центр + разброс координат для каждого города (для ссылок на Яндекс.Карты)
+const cityCoords: Record<string, { lat: number; lon: number; spread: number }> = {
+  'Москва': { lat: 55.7558, lon: 37.6173, spread: 0.1 },
+  'Санкт-Петербург': { lat: 59.9311, lon: 30.3609, spread: 0.12 },
+  'Новосибирск': { lat: 55.0084, lon: 82.9357, spread: 0.08 },
+  'Екатеринбург': { lat: 56.8389, lon: 60.6057, spread: 0.08 },
+  'Казань': { lat: 55.7961, lon: 49.1064, spread: 0.07 },
+  'Краснодар': { lat: 45.0355, lon: 38.9753, spread: 0.06 },
 }
 
 const phones = [
@@ -61,18 +72,29 @@ function randomReviews(): number {
   return Math.floor(Math.random() * 200) + 1
 }
 
+function buildYandexUrl(name: string, lat: number, lon: number): string {
+  const encoded = encodeURIComponent(name)
+  return `https://yandex.ru/maps/?ll=${lon.toFixed(5)}%2C${lat.toFixed(5)}&z=17&text=${encoded}`
+}
+
 export function generateBusinesses(category: string, city: string): Business[] {
   const names = businessNames[category] || businessNames['Автосервис']
   const addresses = cities[city] || cities['Москва']
+  const coords = cityCoords[city] || cityCoords['Москва']
   
   const count = Math.floor(Math.random() * 10) + 15
   const results: Business[] = []
 
   for (let i = 0; i < count; i++) {
     const hasWebsite = Math.random() > 0.6 // 40% have websites
+    // Генерируем координаты в пределах города
+    const lat = coords.lat + (Math.random() - 0.5) * coords.spread * 2
+    const lon = coords.lon + (Math.random() - 0.5) * coords.spread * 2
+    const name = randomFrom(names)
+    
     results.push({
       id: i + 1,
-      name: randomFrom(names),
+      name,
       category,
       address: `${city}, ${randomFrom(addresses)}, д. ${Math.floor(Math.random() * 100) + 1}`,
       phone: randomFrom(phones),
@@ -82,6 +104,7 @@ export function generateBusinesses(category: string, city: string): Business[] {
       website: hasWebsite ? `https://example${i}.ru` : undefined,
       workingHours: randomFrom(workingHoursList),
       city,
+      yandexUrl: buildYandexUrl(`${name} ${city}`, lat, lon),
     })
   }
 

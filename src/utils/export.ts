@@ -1,7 +1,7 @@
 import { Business } from './mockData'
 
 export function exportToCSV(businesses: Business[]) {
-  const headers = ['Название', 'Категория', 'Адрес', 'Телефон', 'Рейтинг', 'Отзывы', 'Есть сайт', 'Часы работы']
+  const headers = ['Название', 'Категория', 'Адрес', 'Телефон', 'Рейтинг', 'Отзывы', 'Есть сайт', 'Часы работы', 'Ссылка на Яндекс.Карты']
   const rows = businesses.map((b) => [
     `"${b.name}"`,
     `"${b.category}"`,
@@ -11,6 +11,7 @@ export function exportToCSV(businesses: Business[]) {
     b.reviews.toString(),
     b.hasWebsite ? 'Да' : 'Нет',
     `"${b.workingHours}"`,
+    b.yandexUrl,
   ])
 
   const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
